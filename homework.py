@@ -9,8 +9,8 @@ from telebot import TeleBot
 
 import exceptions
 
-load_dotenv()
 
+load_dotenv()
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -71,8 +71,7 @@ def get_api_answer(timestamp):
         logger.error(f'Не удалось получить корректный ответ от API: {error}')
         raise Exception('Статус ответа отличен от 200')
 
-# 1714566838 - на 1 мая
-# 1717245238 - на 1 июня
+# timestamp = 1714566838 - на 1 мая, 1717245238 - на 1 июня
 
 
 def check_response(response):
@@ -92,8 +91,14 @@ def parse_status(homework):
     """Функция проверки изменения статуса домашней работы."""
     if homework:
         try:
-            homework_name = homework[0]['homework_name']
-            verdict = HOMEWORK_VERDICTS[homework[0]['status']]
+            if 'homework_name' in homework:
+                homework_name = homework['homework_name']
+            else:
+                raise KeyError('В ответе API домашки нет ключа "homework_name"')
+            if 'status' in homework and homework['status'] in HOMEWORK_VERDICTS:
+                verdict = HOMEWORK_VERDICTS[homework['status']]
+            else:
+                raise KeyError('Статус домашней работы недокументирован/отсутствует')
         except Exception as error:
             logger.error(f'Произошла ошибка: {error}')
             raise error
@@ -117,7 +122,8 @@ def main():
             timestamp = int(time.time())
             homework_statuses = get_api_answer(timestamp)
             print(homework_statuses)
-            homework = check_response(homework_statuses)
+            homeworks = check_response(homework_statuses)
+            homework = homeworks[0] if homeworks else None
             message = parse_status(homework)
             if message:
                 send_message(bot, message)
@@ -125,8 +131,8 @@ def main():
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
-        finally:
-            time.sleep(RETRY_PERIOD)
+        time.sleep(RETRY_PERIOD)
+
 
 if __name__ == '__main__':
     main()
