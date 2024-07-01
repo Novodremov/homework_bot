@@ -93,15 +93,18 @@ def check_response(response):
 
 def parse_status(homework):
     """Функция проверки изменения статуса домашней работы."""
-    if 'homework_name' not in homework:
-        raise KeyError('В ответе API домашки нет ключа "homework_name"')
-    homework_name = homework['homework_name']
-    if 'status' not in homework and homework['status'] in HOMEWORK_VERDICTS:
-        raise KeyError('Статус домашней работы отсутствует')
-    if homework['status'] not in HOMEWORK_VERDICTS:
-        raise KeyError('Статус домашней работы недокументирован')
-    verdict = HOMEWORK_VERDICTS[homework['status']]
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    if homework:
+        if 'homework_name' not in homework:
+            raise KeyError('В ответе API домашки нет ключа "homework_name"')
+        homework_name = homework['homework_name']
+        if ('status' not in homework
+                and homework['status'] in HOMEWORK_VERDICTS):
+            raise KeyError('Статус домашней работы отсутствует')
+        if homework['status'] not in HOMEWORK_VERDICTS:
+            raise KeyError('Статус домашней работы недокументирован')
+        verdict = HOMEWORK_VERDICTS[homework['status']]
+        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    logger.debug('Статус домашней работы не изменился')
 
 
 def main():
@@ -122,13 +125,9 @@ def main():
             homework_statuses = get_api_answer(timestamp)
             homeworks = check_response(homework_statuses)
             homework = homeworks[0] if homeworks else None
-            if homework:
-                message = parse_status(homework)
-                if message and message != last_message:
-                    send_message(bot, message)
-                    last_message = message
-            else:
-                logger.debug('Статус домашней работы не изменился')
+            message = parse_status(homework)
+            if message and message != last_message:
+                send_message(bot, message)
 
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
