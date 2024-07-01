@@ -1,10 +1,11 @@
 import logging
 import os
-import requests
 import sys
 import time
-from dotenv import load_dotenv
 from http import HTTPStatus
+
+import requests
+from dotenv import load_dotenv
 from telebot import TeleBot
 
 import exceptions
@@ -26,11 +27,6 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-)
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
 logger.addHandler(handler)
@@ -41,8 +37,13 @@ def check_tokens():
     if not all((PRACTICUM_TOKEN,
                 TELEGRAM_TOKEN,
                 TELEGRAM_CHAT_ID)):
+        token_names = ['PRACTICUM_TOKEN',
+                       'TELEGRAM_TOKEN',
+                       'TELEGRAM_CHAT_ID']
+        missing_tokens = ', '.join(
+            [token for token in token_names if not globals()[token]])
         raise exceptions.MissingCorrectTokens(
-            'Некорректно определены переменные окружения'
+            f'Некорректно определены переменные окружения: {missing_tokens}'
         )
 
 
@@ -51,78 +52,56 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
     except Exception as error:
-        raise Exception(
+        raise exceptions.SendMessageError(
             f'Не удалось отправить сообщение пользователю: {error}')
-    logger.debug('''Пользователю отправлено сообщение об изменении'''
-                 ''' статуса домашней работы''')
+    logger.debug('''Пользователю отправлено сообщение об изменении
+                 статуса домашней работы''')
 
-
-''' Этот комментарий уберу на следующей итерации.
-Пытался реализовать функцию get_api_answer с разделением случаев ошибки
-во время выполенения requests.get() запроса и возврата статуса ответа,
-отличного от 200. В таком виде не проходятся тесты, причину так и не понял:
 
 def get_api_answer(timestamp):
     """Функция запроса к эндпоинту API-сервиса."""
+    request_params = {'url': ENDPOINT,
+                      'headers': HEADERS,
+                      'params': {'from_date': timestamp}}
     try:
-        homework_statuses = requests.get(ENDPOINT,
-                                         headers=HEADERS,
-                                         params={'from_date': timestamp}
-                                         )
-    except requests.RequestException:
-        raise requests.RequestException('Ошибка во время запроса к API')
-    status_code = homework_statuses.status_code
+        responce = requests.get(url=request_params['url'],
+                                headers=request_params['headers'],
+                                params=request_params['params']
+                                )
+    except requests.RequestException as error:
+        raise ConnectionError(f'''Ошибка во время запроса к API: {error},
+                               параметры запроса: {request_params}''')
+    status_code = responce.status_code
     if status_code == HTTPStatus.OK:
-        return homework_statuses.json()
-    raise Exception(
+        return responce.json()
+    raise ConnectionError(
         f'Эндпоинт {ENDPOINT} недоступен. Код ответа API: {status_code}')
-'''
-
-
-# Тесты прошла следующая реализация:
-def get_api_answer(timestamp):
-    """Функция запроса к эндпоинту API-сервиса."""
-    try:
-        homework_statuses = requests.get(ENDPOINT,
-                                         headers=HEADERS,
-                                         params={'from_date': timestamp}
-                                         )
-        status_code = homework_statuses.status_code
-        if status_code == HTTPStatus.OK:
-            return homework_statuses.json()
-        raise Exception('Статус ответа отличен от 200')
-    except Exception as error:
-        logger.error(f'Не удалось получить корректный ответ от API: {error}')
-        raise Exception('Статус ответа отличен от 200')
 
 
 def check_response(response):
     """Функция проверки корректности ответ API-сервиса."""
     if not isinstance(response, dict):
-
-        raise TypeError('В качестве ответа API должен быть получен словарь')
+        raise TypeError(
+            f'В качестве ответа API вместо словаря получен {type(response)}')
     if 'homeworks' not in response:
-        logger.error('В ответе API отсутствует ключ "homeworks"')
         raise KeyError('В ответе API отсутствует ключ "homeworks"')
     if not isinstance(response['homeworks'], list):
-        raise TypeError('Значением ключа "homeworks" должен быть список')
+        raise TypeError(f'''Значением ключа "homeworks" является не список,
+                         а {type(response['homeworks'])}''')
     return response['homeworks']
 
 
 def parse_status(homework):
     """Функция проверки изменения статуса домашней работы."""
-    if homework:
-        if 'homework_name' in homework:
-            homework_name = homework['homework_name']
-        else:
-            raise KeyError('В ответе API домашки нет ключа "homework_name"')
-        if 'status' in homework and homework['status'] in HOMEWORK_VERDICTS:
-            verdict = HOMEWORK_VERDICTS[homework['status']]
-        else:
-            raise KeyError(
-                'Статус домашней работы недокументирован/отсутствует')
-        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    logger.debug('Статус домашней работы не изменился')
+    if 'homework_name' not in homework:
+        raise KeyError('В ответе API домашки нет ключа "homework_name"')
+    homework_name = homework['homework_name']
+    if 'status' not in homework and homework['status'] in HOMEWORK_VERDICTS:
+        raise KeyError('Статус домашней работы отсутствует')
+    if homework['status'] not in HOMEWORK_VERDICTS:
+        raise KeyError('Статус домашней работы недокументирован')
+    verdict = HOMEWORK_VERDICTS[homework['status']]
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def main():
@@ -135,28 +114,39 @@ def main():
 
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
+    last_message = ''
+    last_error_message = ''
 
     while True:
         try:
             homework_statuses = get_api_answer(timestamp)
-            print(homework_statuses)
             homeworks = check_response(homework_statuses)
             homework = homeworks[0] if homeworks else None
-            message = parse_status(homework)
-            if message:
-                send_message(bot, message)
+            if homework:
+                message = parse_status(homework)
+                if message and message != last_message:
+                    send_message(bot, message)
+                    last_message = message
+            else:
+                logger.debug('Статус домашней работы не изменился')
 
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
-            # Пытаемся отправить сообщение об ошибке пользователю.
-            try:
-                send_message(bot, message)
-            except Exception as error:
-                message = f'Сбой при отправке сообщения об ошибке: {error}'
-                logger.error(message)
+            if (type(error).__name__ != exceptions.SendMessageError
+                    and message != last_error_message):
+                try:
+                    send_message(bot, message)
+                    last_error_message = message
+                except Exception as error:
+                    message = f'Сбой при отправке сообщения об ошибке: {error}'
+                    logger.error(message)
         time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+    )
     main()
