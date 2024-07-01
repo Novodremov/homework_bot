@@ -50,12 +50,36 @@ def send_message(bot, message):
     """Функция отправки сообщения пользователю."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logger.debug('''Пользователю отправлено сообщение об изменении'''
-                     ''' статуса домашней работы''')
     except Exception as error:
-        logger.error(f'Не удалось отправить сообщение пользователю: {error}')
+        raise Exception(
+            f'Не удалось отправить сообщение пользователю: {error}')
+    logger.debug('''Пользователю отправлено сообщение об изменении'''
+                 ''' статуса домашней работы''')
 
 
+''' Этот комментарий уберу на следующей итерации.
+Пытался реализовать функцию get_api_answer с разделением случаев ошибки
+во время выполенения requests.get() запроса и возврата статуса ответа,
+отличного от 200. В таком виде не проходятся тесты, причину так и не понял:
+
+def get_api_answer(timestamp):
+    """Функция запроса к эндпоинту API-сервиса."""
+    try:
+        homework_statuses = requests.get(ENDPOINT,
+                                         headers=HEADERS,
+                                         params={'from_date': timestamp}
+                                         )
+    except requests.RequestException:
+        raise requests.RequestException('Ошибка во время запроса к API')
+    status_code = homework_statuses.status_code
+    if status_code == HTTPStatus.OK:
+        return homework_statuses.json()
+    raise Exception(
+        f'Эндпоинт {ENDPOINT} недоступен. Код ответа API: {status_code}')
+'''
+
+
+# Тесты прошла следующая реализация:
 def get_api_answer(timestamp):
     """Функция запроса к эндпоинту API-сервиса."""
     try:
@@ -70,8 +94,6 @@ def get_api_answer(timestamp):
     except Exception as error:
         logger.error(f'Не удалось получить корректный ответ от API: {error}')
         raise Exception('Статус ответа отличен от 200')
-
-# timestamp = 1714566838 - на 1 мая, 1717245238 - на 1 июня
 
 
 def check_response(response):
@@ -90,18 +112,15 @@ def check_response(response):
 def parse_status(homework):
     """Функция проверки изменения статуса домашней работы."""
     if homework:
-        try:
-            if 'homework_name' in homework:
-                homework_name = homework['homework_name']
-            else:
-                raise KeyError('В ответе API домашки нет ключа "homework_name"')
-            if 'status' in homework and homework['status'] in HOMEWORK_VERDICTS:
-                verdict = HOMEWORK_VERDICTS[homework['status']]
-            else:
-                raise KeyError('Статус домашней работы недокументирован/отсутствует')
-        except Exception as error:
-            logger.error(f'Произошла ошибка: {error}')
-            raise error
+        if 'homework_name' in homework:
+            homework_name = homework['homework_name']
+        else:
+            raise KeyError('В ответе API домашки нет ключа "homework_name"')
+        if 'status' in homework and homework['status'] in HOMEWORK_VERDICTS:
+            verdict = HOMEWORK_VERDICTS[homework['status']]
+        else:
+            raise KeyError(
+                'Статус домашней работы недокументирован/отсутствует')
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
     logger.debug('Статус домашней работы не изменился')
 
@@ -115,11 +134,10 @@ def main():
         sys.exit(error)
 
     bot = TeleBot(token=TELEGRAM_TOKEN)
+    timestamp = int(time.time())
 
     while True:
         try:
-
-            timestamp = int(time.time())
             homework_statuses = get_api_answer(timestamp)
             print(homework_statuses)
             homeworks = check_response(homework_statuses)
@@ -131,6 +149,12 @@ def main():
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
+            # Пытаемся отправить сообщение об ошибке пользователю.
+            try:
+                send_message(bot, message)
+            except Exception as error:
+                message = f'Сбой при отправке сообщения об ошибке: {error}'
+                logger.error(message)
         time.sleep(RETRY_PERIOD)
 
 
